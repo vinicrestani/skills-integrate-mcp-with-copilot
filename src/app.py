@@ -5,7 +5,8 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
@@ -14,13 +15,41 @@ from pathlib import Path
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
 
+# Segurança básica HTTP
+security = HTTPBasic()
+
+# Banco de dados em memória para instituições
+institutions = {}
+
+# Função para autenticação
+def get_current_institution(credentials: HTTPBasicCredentials = Depends(security)):
+    institution = institutions.get(credentials.username)
+    if not institution or institution['password'] != credentials.password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais inválidas."
+        )
+    return institution
+
 # Mount the static files directory
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
 
-# In-memory activity database
 activities = {
+@app.post("/institutions/signup")
+def signup_institution(name: str, email: str, password: str):
+    if email in institutions:
+        raise HTTPException(status_code=400, detail="Instituição já cadastrada.")
+    institutions[email] = {"name": name, "email": email, "password": password}
+    return {"message": f"Instituição '{name}' cadastrada com sucesso."}
+
+@app.post("/institutions/login")
+def login_institution(credentials: HTTPBasicCredentials = Depends(security)):
+    institution = institutions.get(credentials.username)
+    if not institution or institution['password'] != credentials.password:
+        raise HTTPException(status_code=401, detail="Credenciais inválidas.")
+    return {"message": f"Login realizado para {institution['name']}"}
     "Chess Club": {
         "description": "Learn strategies and compete in chess tournaments",
         "schedule": "Fridays, 3:30 PM - 5:00 PM",
@@ -84,49 +113,29 @@ def root():
 
 
 @app.get("/activities")
-def get_activities():
+def get_activities(institution: dict = Depends(get_current_institution)):
     return activities
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
-    """Sign up a student for an activity"""
-    # Validate activity exists
+def signup_for_activity(activity_name: str, email: str, institution: dict = Depends(get_current_institution)):
+    """Sign up a student for an activity (instituição autenticada)"""
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
     activity = activities[activity_name]
-
-    # Validate student is not already signed up
     if email in activity["participants"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Student is already signed up"
-        )
-
-    # Add student
+        raise HTTPException(status_code=400, detail="Student is already signed up")
     activity["participants"].append(email)
     return {"message": f"Signed up {email} for {activity_name}"}
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
-    """Unregister a student from an activity"""
-    # Validate activity exists
+def unregister_from_activity(activity_name: str, email: str, institution: dict = Depends(get_current_institution)):
+    """Unregister a student from an activity (instituição autenticada)"""
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
-
-    # Get the specific activity
     activity = activities[activity_name]
-
-    # Validate student is signed up
     if email not in activity["participants"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Student is not signed up for this activity"
-        )
-
-    # Remove student
+        raise HTTPException(status_code=400, detail="Student is not signed up for this activity")
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
